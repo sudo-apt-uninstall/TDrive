@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"TDrive/backend/core"
+	"TDrive/backend/datadir"
 )
 
 const stateFileName = "cli.json"
@@ -86,10 +87,19 @@ func (s *state) save() error {
 	return os.Rename(tmp, path)
 }
 
+// statePath resolves cli.json through datadir rather than calling
+// os.UserConfigDir directly.
+//
+// The two agree on an ordinary desktop install, which is why the direct
+// call survived: it was never wrong, only unprotected. It becomes wrong
+// the moment anything overrides the base -- mobile already does, and
+// portable mode now does too. Without this, cli.json would stay behind
+// in the user profile while every other TDrive file moved, and the
+// installation would look portable while silently not being so.
 func statePath() (string, error) {
-	dir, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "TDrive", stateFileName), nil
+	return filepath.Join(dir, stateFileName), nil
 }
