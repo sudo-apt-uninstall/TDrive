@@ -18,17 +18,29 @@ var chokepointAllowed = map[string]bool{
 	filepath.Join("backend", "datadir", "portable.go"): true,
 }
 
-// The calls that must not appear outside the files above. Anything that
-// resolves one of TDrive's own paths belongs behind datadir.Dir or
-// datadir.CacheDir.
+// The calls that must not appear outside the files above: the two that
+// resolve TDrive's *own* directories, and the two that mobile and
+// portable mode override.
+//
+// os.UserHomeDir is deliberately NOT here. The first version of this
+// test included it and would have failed on correct code --
+// cmd/tdrive/install_cli.go installs the CLI into the user's home, and
+// an Android build script does the same. Neither resolves a TDrive data
+// path; the home directory is the user's location, and asking the OS
+// for it is exactly right when the destination really is the user's
+// home.
+//
+// That mistake is worth leaving documented. A guard that fails on
+// correct code is worse than no guard: the first thing anyone does with
+// a test that blocks legitimate work is delete it, and the real
+// protection goes with it.
 var chokepointForbidden = map[string]bool{
 	"UserConfigDir": true,
 	"UserCacheDir":  true,
-	"UserHomeDir":   true,
 }
 
 // TestNoProductionCodeBypassesDatadir fails if any production file
-// resolves a TDrive path for itself.
+// resolves one of TDrive's own directories for itself.
 //
 // This exists because two files already did. Neither was exotic: both
 // were written by someone who needed a config directory and reached for
@@ -110,12 +122,28 @@ func TestNoProductionCodeBypassesDatadir(t *testing.T) {
 	}
 
 	if len(offenders) > 0 {
-		t.Fatalf("production code resolved a TDrive path without datadir:\n  %s\n\n"+
+		t.Fatalf("production code resolved a TDrive directory without datadir:\n  %s\n\n"+
 			"Use datadir.Dir() or datadir.CacheDir(). They honour the\n"+
 			"overrides mobile and portable mode depend on; calling the OS\n"+
 			"helper directly leaves that file behind when every other one\n"+
 			"moves, which looks portable and silently is not.",
 			strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestTheGuardStillAllowsLegitimateHomeDirectoryUse is the inverse.
+//
+// A guard is only meaningful if something it permits is actually
+// reached. Without this, narrowing the forbidden set to nothing at all
+// would still pass the test above.
+func TestTheGuardStillAllowsLegitimateHomeDirectoryUse(t *testing.T) {
+	if chokepointForbidden["UserHomeDir"] {
+		t.Fatal("os.UserHomeDir must stay permitted: installing the CLI into " +
+			"the user's home is not a TDrive data path, and banning it fails " +
+			"on correct code")
+	}
+	if len(chokepointForbidden) == 0 {
+		t.Fatal("the forbidden set is empty, so the guard above cannot fail")
 	}
 }
 
