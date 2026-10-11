@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"TDrive/backend/daemon"
+	"TDrive/backend/datadir"
 	"TDrive/backend/processlock"
 )
 
@@ -160,12 +161,16 @@ func daemonLogPath() (string, error) {
 	return filepath.Join(dir, "daemon.log"), nil
 }
 
+// tdriveConfigDir resolves TDrive's own directory through datadir rather
+// than calling os.UserConfigDir directly.
+//
+// This was the second and last production bypass of that chokepoint. A
+// misplaced log is less damaging than misplaced state, but it is worse
+// to misplace quietly: someone debugging a portable installation would
+// be reading a stale log from the wrong machine's profile while the real
+// one sat unwritten.
 func tdriveConfigDir() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "TDrive"), nil
+	return datadir.Dir()
 }
 
 func isDaemonNotRunning(err error) bool {
