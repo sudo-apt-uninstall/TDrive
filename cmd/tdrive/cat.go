@@ -5,10 +5,26 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"TDrive/backend/datadir"
 )
 
+// catTempPath picks the scratch location `cat` downloads into before
+// streaming it to stdout.
+//
+// It used os.MkdirTemp(""), which asks the OS for its temp directory and
+// therefore ignores both portable mode and the mobile overrides. On a
+// portable installation that wrote the contents of a remote file to the
+// host machine's system drive -- briefly, but on a machine the user is
+// about to walk away from, which is the exact failure portable mode
+// exists to prevent.
+//
+// The cache root is the right home. datadir resolves it through the one
+// chokepoint so it follows the installation, and CleanupCacheTemps
+// already sweeps that root at startup if a crash leaves something
+// behind.
 func catTempPath() (string, func() error, error) {
-	dir, err := os.MkdirTemp("", "tdrive-cat-*")
+	dir, err := datadir.CreateCacheTempDir("tdrive-cat-*")
 	if err != nil {
 		return "", nil, err
 	}
