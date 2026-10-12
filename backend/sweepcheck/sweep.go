@@ -12,6 +12,14 @@
 // the function before and after the edit so the two can be run over the same
 // tree, because a fix is only demonstrated by showing the thing it replaced
 // failing on the same input.
+//
+// The PRE-edit copy lives in sweep_test.go, not here. It necessarily calls
+// os.TempDir(), and the chokepoint guard in backend/datadir walks every file
+// that is not a _test.go file. Round 31 caught this: the fixture was
+// originally in this file and would have failed
+// TestNoProductionCodeBypassesDatadir the first time that guard ran over the
+// whole tree. A test fixture that trips the project's own guard is not a
+// fixture, it is a bypass with an explanation attached.
 package sweepcheck
 
 import (
@@ -46,24 +54,5 @@ func sweepStaleVideoThumbnailDirs() {
 			continue
 		}
 		_ = os.RemoveAll(entry)
-	}
-}
-
-// sweepStaleVideoThumbnailDirsOld is the body BEFORE the edit.
-func sweepStaleVideoThumbnailDirsOld() {
-	entries, err := os.ReadDir(os.TempDir())
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-videoThumbTempMaxAge)
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), videoThumbTempPrefix) {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil || info.ModTime().After(cutoff) {
-			continue
-		}
-		_ = os.RemoveAll(filepath.Join(os.TempDir(), entry.Name()))
 	}
 }

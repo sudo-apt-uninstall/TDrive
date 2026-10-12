@@ -3,11 +3,43 @@ package sweepcheck
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"TDrive/backend/datadir"
 )
+
+// sweepStaleVideoThumbnailDirsOld is the body BEFORE the edit in 404a8ffb.
+//
+// It lives in this file rather than sweep.go for a reason worth keeping. It
+// calls os.TempDir(), which is exactly what the chokepoint guard in
+// backend/datadir bans -- and that guard walks every file that is NOT a
+// _test.go file. Putting a deliberately-wrong fixture in a production-path
+// file would have failed TestNoProductionCodeBypassesDatadir the first time it
+// ran over the whole tree.
+//
+// Round 31 caught this: "backend/sweepcheck/sweep.go:54,67: old-sweep fixture
+// uses os.TempDir() in a non-_test.go source file". It was reported as a
+// likely false positive. It was not a false positive. The guard was right and
+// the fixture was in the wrong file.
+func sweepStaleVideoThumbnailDirsOld() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-videoThumbTempMaxAge)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), videoThumbTempPrefix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(os.TempDir(), entry.Name()))
+	}
+}
 
 // age backdates a directory past the sweep cutoff.
 func age(t *testing.T, dir string, d time.Duration) {
