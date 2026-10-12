@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+
+	"TDrive/backend/datadir"
 )
 
 // generateVideoPoster draws one frame with the mpv that already ships for
@@ -30,7 +32,13 @@ func generateVideoPoster(ctx context.Context, path string, maxEdge int) ([]byte,
 	// mpv writes the frame as a file: --vo=image has no way to write to a pipe,
 	// and a temp directory of our own means the output is whatever landed in an
 	// empty directory rather than a name mpv chose and might change.
-	outDir, err := os.MkdirTemp("", "tdrive-poster-")
+	//
+	// The directory comes from datadir rather than the OS. It used to be
+	// os.MkdirTemp(""), which put a decoded frame of the user's video on the
+	// host machine's system drive -- on a portable installation, the one place
+	// it must never go. Posters are generated while browsing a gallery, so this
+	// ran often rather than rarely.
+	outDir, err := datadir.CreateCacheTempDir("tdrive-poster-")
 	if err != nil {
 		return nil, fmt.Errorf("thumbnail: poster workspace: %w", err)
 	}
