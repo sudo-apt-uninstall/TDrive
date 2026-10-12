@@ -1,6 +1,7 @@
 package mountdav
 
 import (
+	"TDrive/backend/datadir"
 	"errors"
 	"fmt"
 	"io"
@@ -130,11 +131,11 @@ func newResumeStore(root string, idleTimeout time.Duration, maxObjectBytes, maxA
 }
 
 // newResumeStoreInTemp creates a resumeStore rooted in a fresh, private
-// system-temp-directory scratch space, following this codebase's existing
-// os.MkdirTemp convention for scratch directories (see e.g.
-// backend/services/file/import.go, backend/media/video_thumbnails.go).
+// cache-root scratch directory so portable mode keeps resume bytes on the
+// portable volume. macOS Finder may send chunked PUTs without Content-Length;
+// this staging cannot be removed without changing that resume implementation.
 func newResumeStoreInTemp() (*resumeStore, error) {
-	root, err := os.MkdirTemp("", "tdrive-mountdav-resume-*")
+	root, err := datadir.CreateCacheTempDir("tdrive-mountdav-resume-*")
 	if err != nil {
 		return nil, fmt.Errorf("mountdav: create resume scratch directory: %w", err)
 	}

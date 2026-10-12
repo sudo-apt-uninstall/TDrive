@@ -1,6 +1,7 @@
 package file
 
 import (
+	"TDrive/backend/datadir"
 	"context"
 	"errors"
 	"fmt"
@@ -472,7 +473,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 	}()
 	ensureTmp := func() (string, error) {
 		if tmpRoot == "" {
-			dir, err := os.MkdirTemp("", "tdrive-import-*")
+			dir, err := datadir.CreateCacheTempDir("tdrive-import-*")
 			if err != nil {
 				return "", err
 			}

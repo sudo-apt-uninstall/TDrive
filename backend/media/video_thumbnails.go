@@ -1,6 +1,7 @@
 package media
 
 import (
+	"TDrive/backend/datadir"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -745,7 +746,7 @@ func (t *videoThumbnailer) ensureDir() (string, error) {
 	}
 	t.mu.Unlock()
 
-	dir, err := os.MkdirTemp("", videoThumbTempPrefix)
+	dir, err := datadir.CreateCacheTempDir(videoThumbTempPrefix)
 	if err != nil {
 		return "", err
 	}
@@ -1044,19 +1045,19 @@ func bundledMPVBinaryPath() (string, error) {
 }
 
 func sweepStaleVideoThumbnailDirs() {
-	entries, err := os.ReadDir(os.TempDir())
+	entries, err := datadir.CacheTempDirs()
 	if err != nil {
 		return
 	}
 	cutoff := time.Now().Add(-videoThumbTempMaxAge)
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), videoThumbTempPrefix) {
+		if !strings.HasPrefix(filepath.Base(entry), videoThumbTempPrefix) {
 			continue
 		}
-		info, err := entry.Info()
+		info, err := os.Stat(entry)
 		if err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(os.TempDir(), entry.Name()))
+		_ = os.RemoveAll(entry)
 	}
 }

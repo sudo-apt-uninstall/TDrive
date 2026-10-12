@@ -305,6 +305,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"TDrive/backend/datadir"
 )
 
 type Player struct {
@@ -395,13 +397,20 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		return err
 	}
 
-	ipcDir, err := os.MkdirTemp("", "tdrive-mpv-*")
+	ipcDir, err := datadir.CreateCacheTempDir("tdrive-mpv-*")
 	if err != nil {
 		return fmt.Errorf("native player: create IPC dir: %w", err)
 	}
 	_ = os.Chmod(ipcDir, 0o700)
 	p.ipcDir = ipcDir
 	p.ipcPath = filepath.Join(ipcDir, fmt.Sprintf("mpv-%d.sock", os.Getpid()))
+	// Unix-domain socket paths are short on Linux (sun_path is 108 bytes).
+	// The portable cache root may be deeper than the OS temp directory, so
+	// reject an unusable path here instead of surfacing a delayed IPC timeout.
+	if len(p.ipcPath) > 100 {
+		_ = os.RemoveAll(ipcDir)
+		return fmt.Errorf("native player: IPC socket path is %d bytes, over the 100-byte portable limit: %s; move TDrive to a shorter path", len(p.ipcPath), p.ipcPath)
+	}
 	_ = os.Remove(p.ipcPath)
 	args := linuxMPVArgs(version, p.ipcPath, windowID, opts)
 
