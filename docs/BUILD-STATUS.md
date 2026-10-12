@@ -5,7 +5,8 @@ pasted untidied, from a real toolchain.
 
 Until today every commit on `portable-mode` carried an `UNCOMPILED` marker,
 because the environment the code was written in had no Go toolchain and no
-network egress. That is no longer true for `backend/datadir`.
+network egress. That is no longer true for `backend/datadir` and
+`backend/httprange`.
 
 ## Toolchain
 
@@ -154,6 +155,98 @@ Routing the directory without that check would have traded a portability bug
 for an intermittent, badly-attributed failure on exactly the installations this
 branch exists to support.
 
+## `backend/httprange` — written, not borrowed
+
+The nineteen-repository survey behind this branch set out to find a correct
+HTTP Range implementation to copy. It did not find one. Every candidate failed
+at a boundary: negative lengths from `bytes=9-3` used to build headers, starts
+past the end clamped to the last byte and returned under a 206, range handling
+skipped entirely for zero-length files, and a part plan whose two ends were
+computed in different coordinate systems.
+
+So this package was written rather than adapted. It is the second on this
+branch to compile, and like `datadir` it imports only the standard library.
+
+```
+$ gofmt -l backend/httprange/
+(no output)
+
+$ go vet ./backend/httprange/...
+EXIT=0
+
+$ go test ./backend/httprange/... -count=1 -v
+--- PASS: TestParse (0.00s)
+--- PASS: TestLengthAlwaysAgreesWithTheInterval (0.00s)
+--- PASS: TestSplitCoversExactlyTheRange (0.00s)
+--- PASS: TestSplitSingleByteFetchesOnePart (0.00s)
+--- PASS: TestSplitRejectsNonsense (0.00s)
+--- PASS: TestContentRangeHeaders (0.00s)
+PASS
+ok  	TDrive/backend/httprange	0.002s
+```
+
+Six tests, forty subtests, green on the first run.
+
+### Which is exactly why they were then attacked
+
+**A suite that passes first try has not yet been shown to be capable of
+failing.** Nine mutants were seeded into `httprange.go`, one at a time, each
+disabling a single guard. Seven died immediately. Two survived.
+
+```
+killed    inverted-range reject (bytes=9-3)
+killed    end truncation (end > size-1)
+killed    suffix-zero reject (bytes=-0)
+killed    suffix clamp (n > size)
+killed    digit-only check in parseUint
+SURVIVED  Split last-part from End not Length   <-- NO TEST KILLS THIS
+killed    LastKeep inclusive +1
+killed    FirstTrim subtraction
+SURVIVED  multiple-range reject   <-- NO TEST KILLS THIS
+```
+
+**The first survivor is the FileToLink defect itself** — the one bug this
+entire package was written to avoid — and the suite built specifically to catch
+it did not. That is the finding of this section.
+
+It survived for a reason worth keeping. `Length == End - Start + 1`, so
+`Start + Length == End + 1`, and the two formulas diverge only when a range
+*ends on the last byte of a part*. At that offset the buggy plan adds a part
+and sets `LastKeep: 0` — and a trailing part contributing zero bytes **rebuilds
+the correct interval exactly**, because the extra part and the zero cancel.
+The differential test was satisfied. The over-fetch bound then missed by one
+byte: waste was 1,048,575 against a threshold of 1,048,576.
+
+```
+range [524287,524287] len=1
+   correct: parts=1 fetch=524288   rebuild_end=524287 LastKeep=524288
+   mutant : parts=2 fetch=1048576  rebuild_end=524287 LastKeep=0
+   rebuild agrees? True   waste=1048575   waste>=2P? False
+```
+
+A megabyte fetched to serve one byte, and two independent assertions both
+reporting success.
+
+The missing invariant was never about arithmetic: **every part in a plan must
+contribute at least one byte.** `LastKeep == 0` is proof that a part should not
+be in the plan at all. With that assertion plus an independently-computed
+minimum part count, the mutant dies.
+
+The regression test had a second weakness worth naming: it used `bytes=0-0`,
+which is the *single offset where the buggy formula agrees with the correct
+one*. It now also tests `bytes=524287-524287`, where they diverge.
+
+The second survivor is benign and was verified rather than assumed. Removing
+the comma check still refuses `bytes=0-10,20-30`, because the comma lands
+inside a bound and `parseUint` rejects it. The guard is deliberately redundant;
+it is kept, and labelled in the source as a known survivor so nobody deletes it
+as dead code or trusts it as load-bearing.
+
+**Rule earned: a test suite that passes on the first run is an untested
+measuring instrument. Seed the defect it was written to catch and watch it
+fail, or it has proved nothing.** This is the second time on this project that
+the measuring instrument carried the defect it was measuring for.
+
 ## Still open
 
 - **`backend/media/video_thumbnails.go` — three sites, unfixed.** 28,128 bytes.
@@ -173,6 +266,9 @@ branch exists to support.
 - **`cmd/tdrive/portable_startup.go` has not been compiled.** It is `package
   main` and needs the dependency tree. The `init()` ordering argument in that
   file is still an argument.
+- **`httprange` is not wired to anything yet.** It compiles and it is tested,
+  but no handler calls it. Until the WebDAV and HTTP serving paths use it, the
+  correct implementation and the shipping behaviour are different things.
 - `go build ./...` across the repository has never run.
 - No Telegram transfer, no GUI, no Windows run, no portable-mode run from
   actual removable media.
@@ -188,3 +284,14 @@ go build ./... && go vet ./... && go test ./backend/datadir/... -v -count=1
 
 To reproduce the measurement, add the two files named above at their real paths
 and run the walk again.
+
+`backend/httprange` is standard-library-only and needs no other package:
+
+```sh
+mkdir -p probe/backend/httprange   # copy httprange.go + httprange_test.go
+go test ./backend/httprange/... -count=1 -v
+```
+
+To reproduce the mutation run, replace one guard at a time with `if false {`
+and confirm a test fails. If none does, the guard is untested — fix the suite,
+not the guard.
