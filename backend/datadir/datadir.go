@@ -85,9 +85,74 @@ func CreateCacheTemp(pattern string) (*os.File, error) {
 	return os.CreateTemp(dir, pattern)
 }
 
+// CreateCacheTempDir creates a private, app-owned scratch directory and
+// returns its path. It is the directory counterpart to CreateCacheTemp.
+//
+// It exists because its absence was the bug. Five of the bypasses found on
+// this branch -- thumbnail extraction, media preview sessions, the WebDAV
+// resume buffer, archive import, the CLI's cat -- all needed a scratch
+// *directory*, and the chokepoint only offered a scratch *file*. Faced with no
+// correct call to make, every one of them reached for os.MkdirTemp(""), which
+// lands in the system temp directory and ignores both portable mode and the
+// mobile overrides. That is one missing function, not five separate lapses,
+// and it is worth naming as such: a chokepoint with a hole in it routes
+// traffic around itself.
+//
+// Callers own what they create here. CleanupCacheTemps will not reap these --
+// see the note on that function -- because the sweeps that make these
+// directories already know their own retention, and a scratch directory may
+// still be in use by another copy of the app.
+func CreateCacheTempDir(pattern string) (string, error) {
+	dir, err := CacheDir()
+	if err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(dir, pattern)
+}
+
+// CacheTempDirs lists the immediate subdirectories of the cache root.
+//
+// This is for the age-based sweeps that reap their own scratch directories on
+// startup. They currently enumerate os.TempDir(), which is a bypass in its own
+// right and, more quietly, the wrong place once CreateCacheTempDir is in use:
+// a sweep looking in the system temp directory for directories that are now in
+// the cache root finds nothing, reports success, and leaves them to accumulate
+// forever.
+//
+// A missing cache directory is not an error. There is nothing to sweep before
+// anything has been written, and a startup sweep should not be the thing that
+// fails a launch.
+func CacheTempDirs() ([]string, error) {
+	dir, err := CacheDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("datadir: read cache directory: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, filepath.Join(dir, entry.Name()))
+		}
+	}
+	return names, nil
+}
+
 // CleanupCacheTemps removes app-owned scratch files left by an interrupted
 // upload, encryption, rendition, or mount write. It only examines the cache
 // root and only removes names produced by CreateCacheTemp callers.
+//
+// Directories are skipped, and deliberately so. CreateCacheTempDir callers own
+// their own lifetime: they sweep by age because a scratch directory can belong
+// to a second copy of the app that is still using it, and deleting one out
+// from under a running extractor would be worse than leaving it. Widening this
+// function to remove directories would make the cheap, safe file sweep into a
+// destructive one.
 //
 // A file it cannot delete is left where it is. Windows refuses to unlink a
 // file another process still has open, and on that platform a second copy of
