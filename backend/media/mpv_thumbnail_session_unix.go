@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"TDrive/backend/datadir"
 )
 
 const (
@@ -23,6 +25,22 @@ const (
 	mpvThumbnailWarmupTimeout = 20 * time.Second
 	mpvThumbnailLoadTimeout   = 20 * time.Second
 	mpvThumbnailTempPrefix    = "tdrive-media-thumb-mpv-"
+
+	// mpvThumbnailSocketPathMax is the portable ceiling on a Unix domain
+	// socket path. sun_path is 108 bytes on Linux and 104 on macOS/BSD, and
+	// the limit counts the whole path plus its terminator.
+	//
+	// It matters here because this directory exists to hold a socket, and the
+	// directory moved from the OS temp directory to TDrive's cache root. On a
+	// portable installation that root can be arbitrarily deep -- a USB stick
+	// mounted at /Volumes/Backup Drive 2024/Apps/TDrive Portable is ordinary,
+	// not contrived -- and bind() does not fail gracefully when the path is too
+	// long. It fails with EINVAL, mpv reports nothing useful, and the symptom
+	// surfaces much later as "mpv IPC socket was not ready", which points at
+	// the wrong thing entirely.
+	//
+	// 100 leaves headroom under the smaller of the two platform limits.
+	mpvThumbnailSocketPathMax = 100
 )
 
 func (g *MPVThumbnailGenerator) NewVideoThumbnailSession(sourceURL string) (VideoThumbnailSession, error) {
@@ -89,12 +107,25 @@ func (s *mpvThumbnailSession) ensureStarted(ctx context.Context) error {
 	if s.conn != nil {
 		return nil
 	}
-	dir, err := os.MkdirTemp("", mpvThumbnailTempPrefix)
+	// The scratch directory holds the mpv IPC socket. It used to come from
+	// os.MkdirTemp(""), which ignored portable mode; it now comes from the
+	// datadir chokepoint like every other TDrive path.
+	dir, err := datadir.CreateCacheTempDir(mpvThumbnailTempPrefix)
 	if err != nil {
 		return err
 	}
 	_ = os.Chmod(dir, videoThumbDirMode)
 	socket := filepath.Join(dir, "mpv.sock")
+	if len(socket) > mpvThumbnailSocketPathMax {
+		// Say so here rather than letting bind() fail with EINVAL several
+		// layers down, where it reads as "mpv IPC socket was not ready" and
+		// sends the reader looking at mpv instead of at the path length.
+		_ = os.RemoveAll(dir)
+		return fmt.Errorf("%w: IPC socket path is %d bytes, over the %d-byte "+
+			"limit for a Unix domain socket: %s. Move the TDrive installation "+
+			"to a shorter path",
+			ErrThumbnailUnavailable, len(socket), mpvThumbnailSocketPathMax, dir)
+	}
 
 	cmd := exec.Command(s.path,
 		"--no-config",
